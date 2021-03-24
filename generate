@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+#
+# Copyright (C) 2021 Chris Lamb <chris@chris-lamb.co.uk>
+
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+import re
+import sys
+import time
+import logging
+import daiquiri
+import datetime
+import requests
+
+from lxml import etree
+from dateutil.parser import parse
+
+URL = "https://www.npr.org/programs"
+IMAGE_URL = (
+    "https://media.npr.org/images/podcasts/primary/npr_generic_image_300.jpg?s=200"
+)
+MAX_SEGMENTS = 50
+SHOWS = (
+    {
+        "title": "All Things Considered",
+        "url": "https://www.npr.org/programs/all-things-considered/archive",
+    },
+    {
+        "title": "Weekend Edition Sunday",
+        "url": "https://www.npr.org/programs/weekend-edition-sunday/archive",
+    },
+)
+
+re_title = re.compile(r"^Music")
+
+daiquiri.setup(level=logging.INFO)
+log = daiquiri.getLogger(__name__)
+
+
+def parse_show(show):
+    log.info(f"Parsing top-level for {show['title']} from {show['url']}")
+
+    session = requests.session()
+
+    for x, y in (
+        ("trackingChoice", "true"),
+        ("choiceVersion", "1"),
+        ("dateOfChoice", str(int(time.time()) * 10)),
+    ):
+        session.cookies.set(x, y, domain="www.npr.org")
+
+    r = session.get(show["url"])
+    r.raise_for_status()
+
+    assert b"Cookie Consent and Choices" not in r.content
+
+    root = etree.HTML(r.content)
+
+    for x in root.cssselect("h2 a"):
+        for y in parse_episode(session, show, x.attrib["href"]):
+            yield y
+
+
+def parse_episode(session, show, url):
+    log.info(f"Parsing episode {url}")
+
+    r = session.get(url)
+    r.raise_for_status()
+
+    root = etree.HTML(r.content)
+
+    date = parse(root.cssselect("time")[0].attrib["datetime"])
+
+    for x in root.cssselect("article.rundown-segment"):
+        try:
+            category = x.cssselect(".rundown-segment__slug a")[0].text
+        except IndexError:
+            continue
+
+        if not re_title.search(category):
+            continue
+
+        title = x.cssselect(".rundown-segment__title a")[0].text
+        url = x.cssselect(".audio-tool-download a")[0].attrib["href"]
+        minutes, _, seconds = x.cssselect("time span")[0].text.partition(":")
+
+        log.info(f"Found episode {title}")
+
+        yield {
+            "title": f"{title} ({show['title']})",
+            "date": date,
+            "url": url,
+            "seconds": (int(minutes) * 60) + int(seconds),
+        }
+
+
+def generate_rss(segments):
+    def add_sub_element(parent, name, text=None):
+        elem = etree.SubElement(parent, name)
+        if text is not None:
+            elem.text = text
+        return elem
+
+    root = etree.Element("rss")
+    channel = add_sub_element(root, "channel")
+
+    title = "Music segments from {}".format(" & ".join(x["title"] for x in SHOWS))
+
+    add_sub_element(channel, "title", title)
+    add_sub_element(channel, "description", f"{title}.")
+    add_sub_element(channel, "link", URL)
+
+    date = datetime.datetime.utcnow().strftime("%a, %d %b %Y %T %z")
+    add_sub_element(channel, "pubDate", date)
+    add_sub_element(channel, "lastBuildDate", date)
+
+    image = add_sub_element(channel, "image")
+    add_sub_element(image, "url", IMAGE_URL)
+    add_sub_element(image, "title", title)
+    add_sub_element(image, "link", URL)
+
+    for x in segments:
+        item = add_sub_element(channel, "item")
+        add_sub_element(item, "title", x["title"])
+        add_sub_element(item, "pubDate", x["date"].strftime("%a, %d %b %Y %H:%M:%S %z"))
+
+        enclosure = add_sub_element(item, "enclosure")
+        enclosure.attrib["url"] = x["url"]
+        enclosure.attrib["type"] = "audio/mpeg"
+        enclosure.attrib["length"] = str(x["seconds"])
+
+    return root
+
+
+def main():
+    segments = []
+    for x in SHOWS:
+        segments.extend(parse_show(x))
+
+    log.info(f"Found a total of {len(segments)} segments")
+
+    segments.sort(key=lambda x: x["date"], reverse=True)
+    segments = segments[:MAX_SEGMENTS]
+
+    root = generate_rss(segments)
+
+    print(etree.tostring(root).decode("utf-8"))
+
+
+if __name__ == "__main__":
+    main(*sys.argv[1:])
