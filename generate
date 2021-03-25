@@ -37,8 +37,16 @@ SHOWS = (
         "url": "https://www.npr.org/programs/all-things-considered/archive",
     },
     {
+        "title": "Weekend Edition Saturday",
+        "url": "https://www.npr.org/programs/weekend-edition-saturday/archive",
+    },
+    {
         "title": "Weekend Edition Sunday",
         "url": "https://www.npr.org/programs/weekend-edition-sunday/archive",
+    },
+    {
+        "title": "Morning Edition",
+        "url": "https://www.npr.org/programs/morning-edition/",
     },
 )
 
