@@ -88,7 +88,12 @@ def parse_episode(session, show, url):
 
     root = etree.HTML(r.content)
 
-    date = parse(root.cssselect("time")[0].attrib["datetime"])
+    timestr = root.cssselect("time")[0].attrib["datetime"]
+
+    if "M," in timestr:
+        return
+
+    date = parse(timestr)
 
     for x in root.cssselect("article.rundown-segment"):
         try:
@@ -100,7 +105,11 @@ def parse_episode(session, show, url):
             continue
 
         title = x.cssselect(".rundown-segment__title a")[0].text
-        url = x.cssselect(".audio-tool-download a")[0].attrib["href"]
+        try:
+            url = x.cssselect(".audio-tool-download a")[0].attrib["href"]
+        except IndexError:
+            continue
+
         minutes, _, seconds = x.cssselect("time span")[0].text.partition(":")
 
         log.info(f"Found episode {title}")
