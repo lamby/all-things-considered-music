@@ -24,11 +24,14 @@ import requests
 
 from lxml import etree
 from dateutil.parser import parse
-from rich.progress import track
+from rich.console import Console
 from rich.logging import RichHandler
 
 logging.basicConfig(
-    level=logging.INFO, format="%(message)s", datefmt="[%X]", handlers=[RichHandler()]
+    level=logging.INFO,
+    format="%(message)s",
+    datefmt="[%X]",
+    handlers=[RichHandler(console=Console(stderr=True))],
 )
 
 
@@ -78,13 +81,13 @@ def parse_show(show):
 
     root = etree.HTML(r.content)
 
-    for x in track(root.cssselect("h2 a")):
+    for x in root.cssselect("h2 a"):
         for y in parse_episode(session, show, x.attrib["href"]):
             yield y
 
 
 def parse_episode(session, show, url):
-    logging.debug(f"Parsing episode {url}")
+    logging.info(f"• Parsing episode {url}")
 
     r = session.get(url)
     r.raise_for_status()
@@ -116,7 +119,7 @@ def parse_episode(session, show, url):
 
         minutes, _, seconds = x.cssselect("time span")[0].text.partition(":")
 
-        logging.info(f"Found episode {title!r}")
+        logging.info(f"  • Found segment {title!r}")
 
         yield {
             "title": f"{title} ({show['title']})",
