@@ -19,12 +19,18 @@ import re
 import sys
 import time
 import logging
-import daiquiri
 import datetime
 import requests
 
 from lxml import etree
 from dateutil.parser import parse
+from rich.progress import track
+from rich.logging import RichHandler
+
+logging.basicConfig(
+    level=logging.INFO, format="%(message)s", datefmt="[%X]", handlers=[RichHandler()]
+)
+
 
 URL = "https://www.npr.org/programs"
 IMAGE_URL = (
@@ -52,12 +58,9 @@ SHOWS = (
 
 re_title = re.compile(r"^Music")
 
-daiquiri.setup(level=logging.INFO)
-log = daiquiri.getLogger(__name__)
-
 
 def parse_show(show):
-    log.info(f"Parsing top-level for {show['title']} from {show['url']}")
+    logging.info(f"Parsing top-level for {show['title']!r} from {show['url']}")
 
     session = requests.session()
 
@@ -75,13 +78,13 @@ def parse_show(show):
 
     root = etree.HTML(r.content)
 
-    for x in root.cssselect("h2 a"):
+    for x in track(root.cssselect("h2 a")):
         for y in parse_episode(session, show, x.attrib["href"]):
             yield y
 
 
 def parse_episode(session, show, url):
-    log.info(f"Parsing episode {url}")
+    logging.debug(f"Parsing episode {url}")
 
     r = session.get(url)
     r.raise_for_status()
@@ -97,27 +100,29 @@ def parse_episode(session, show, url):
 
     for x in root.cssselect("article.rundown-segment"):
         try:
-            category = x.cssselect(".rundown-segment__slug a")[0].text
+            category = x.cssselect(".rundown-segment__slug")[0].text.strip()
         except IndexError:
             continue
 
         if not re_title.search(category):
             continue
 
-        title = x.cssselect(".rundown-segment__title a")[0].text
+        title = x.cssselect(".rundown-segment__title a")[0].text.strip()
+
         try:
-            url = x.cssselect(".audio-tool-download a")[0].attrib["href"]
+            mp3_url = x.cssselect(".audio-tool-download a")[0].attrib["href"]
         except IndexError:
             continue
 
         minutes, _, seconds = x.cssselect("time span")[0].text.partition(":")
 
-        log.info(f"Found episode {title}")
+        logging.info(f"Found episode {title!r}")
 
         yield {
             "title": f"{title} ({show['title']})",
+            "description": f"Source: {url}",
             "date": date,
-            "url": url,
+            "url": mp3_url,
             "seconds": (int(minutes) * 60) + int(seconds),
         }
 
@@ -132,7 +137,7 @@ def generate_rss(segments):
     root = etree.Element("rss")
     channel = add_sub_element(root, "channel")
 
-    title = "Music segments from {}".format(" & ".join(x["title"] for x in SHOWS))
+    title = "Music segments from NPR's {}".format(" & ".join(x["title"] for x in SHOWS))
 
     add_sub_element(channel, "title", title)
     add_sub_element(channel, "description", f"{title}.")
@@ -150,6 +155,7 @@ def generate_rss(segments):
     for x in segments:
         item = add_sub_element(channel, "item")
         add_sub_element(item, "title", x["title"])
+        add_sub_element(item, "description", x["description"])
         add_sub_element(item, "pubDate", x["date"].strftime("%a, %d %b %Y %H:%M:%S %z"))
 
         enclosure = add_sub_element(item, "enclosure")
@@ -165,13 +171,14 @@ def main():
     for x in SHOWS:
         segments.extend(parse_show(x))
 
-    log.info(f"Found a total of {len(segments)} segments")
+    logging.info(f"Found a total of {len(segments)} segments")
 
     segments.sort(key=lambda x: x["date"], reverse=True)
     segments = segments[:MAX_SEGMENTS]
 
     root = generate_rss(segments)
 
+    etree.indent(root, space="    ")
     print(etree.tostring(root).decode("utf-8"))
 
 
